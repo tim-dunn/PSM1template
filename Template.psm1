@@ -3,258 +3,779 @@
 
 
 <#
-        .SYNOPSIS
-        PowerShell Module template file
+    .SYNOPSIS
+    PowerShell Module template file
 
-        .NOTES
-        Copyright (c) Microsoft
+    .DESCRIPTION
+    A place for me to stash my debugging functions.
 
-        Who             What        When            Why
-        timdunn         v0.0.0.0    2018-09-06      Created template
+    .NOTES
+    Copyright (c) Microsoft
+
+    Who             What        When            Why
+    timdunn         v0.0.0.0    2018-09-06      Created template
 #>
 
 
 ########################################
 #endregion header
+#region debugging functions
+########################################
+
+
+function Out-Parameters
+{
+    <#
+        .synopsis
+        Output parameters supplied to calling function.
+
+        .description
+        For logging or debugging, it is often useful to dump the paramters with which the function
+        was called. Unfortunatley, $PSBoundParameters does not report defalut parameter values.
+        Additionally, because of variable scoping, it can be difficult to use shared code to get
+        parameter values.
+
+        This provides a best-effort attempt to display the parameters supplied to the calling function.
+
+        .parameter FunctionName
+        Optional (but highly recommended!) parameter used to specify the calling function. If not
+        supplied, this function will use $MyInvocation value(s) from increasing scope to attempt to
+        determine the calling function name, but that can be highly brittle.
+
+        .parameter Parameters
+        Optional (but highly recommended!) parameter into which to specify $PSBoundParameters from
+        the calling function. Again, if not supplied, this function will use Get-Variable to
+        attempt to obtain $PSBoundParameters from the calling scope, but this can be highly brittle
+        with the variety of ways a function can be invoked, defined, etc.
+
+        .parameter Scope
+        Value passed to Get-Variable -Scope parameter to get parameter values from the calling function.
+
+        .parameter AsObject
+        Return [hashtable] of supplied parameters. Default is to return string array of parameters,
+        sorted by name.
+
+        .example
+        function Test-It { [cmdletbinding()] param ( $a, $b, $c ); Out-Parameters -FunctionName Test-It -Parameters $PSBoundParameters }
+
+        Using it in a function to output the [string[]] array to STDOUT
+
+        .example
+        Test-It -a 3 -c $false -Verbose
+
+        Example of sample output to STDOUT:
+
+        Name                           Value
+        ----                           -----
+        a                              3
+        c                              False
+        Verbose                        True
+
+        .example
+        function Test-It { [cmdletbinding()] param ( $a, $b, $c ); $myParameters = Out-Parameters -FunctionName Test-It -Parameters $PSBoundParameters -AsObject }
+
+        Using it in a function to save parameters to [hashtable] for later processing
+    #>
+
+    [CmdletBinding()]
+
+    param
+    (
+        [hashtable]$Parameters = @{ },
+
+        [string]$FunctionName = '',
+
+        [int]$Scope = 1,
+
+        [switch]$AsObject
+    )
+
+    if ( !$Parameters )
+    {
+        # try to get it, but ... no guarantees.
+        $Parameters = Get-Variable -ValueOnly -ErrorAction SilentlyContinue -Name PSBoundParameters -Scope $scope
+    }
+
+    if ( !$FunctionName )
+    {
+        # try to get it, but ... no guarantees.
+
+        if ( [Management.Automation.InvocationInfo]$_myinvocation =
+            Get-Variable -ValueOnly -ErrorAction SilentlyContinue -Name MyInvocation -Scope $Scope )
+        {
+            $FunctionName = $_myInvocation.MyCommand.Name
+        }
+
+        # increase it by one because we need the paramters of the function named $FUNCTIONAME, not the
+        # variables in scope containing the $MYINVOCATION variable containing the calling function name
+
+        $scope++
+
+        if ( !$FunctionName )
+        {
+            # if we didn't get anything back, then it's time to bail
+            break
+        }
+
+        if (
+            Get-Command -CommandType Function -Name $functionName* |
+            Where-Object -Property Name -EQ $FunctionName
+        )
+        {
+            # if we hit a function (as opposed to, say a .PSM1) call it good. Yes, sometimes the
+            #parent-scope MyInvocation returns the .PSM1 file name. #WhiskeyTangoFoxtrot?
+            break
+        }
+    }
+
+    if ( !$FunctionName )
+    {
+        # if we failed, punt. It's the calling function's problem.
+        throw 'Out-Parameters -FunctionName not specified and cannot be determined. Required.'
+    }
+
+    ( Get-Command -Name $FunctionName -CommandType Function ).Parameters.Keys |
+    ForEach-Object -Process `
+    {
+        # get the parameters the calling function (or what we hope is the calling function)
+
+        $value = Get-Variable -Name $_* -Scope $Scope -ErrorAction SilentlyContinue |
+        Where-Object -Property Name -EQ -Value $_ |
+        Select-Object -ExpandProperty Value
+
+        if ( $value )
+        {
+            $Parameters.$_ = $value
+        }
+    }
+
+    if ( $AsObject )
+    {
+        # return the [hashtable], because that's what the calling funciton expects
+        return $Parameters
+    }
+
+    # otherwise, dump it out as [string[]]
+    # we're doing all these stringops because we want to display the parameters ordered by name
+    # this will make debugging easier if we compare one log from "this works" with the failing one
+    $parameterStrings = (
+        $Parameters |
+        Out-String
+    ) -split '[\r\n]+' -notmatch '^\s*$' -replace '\s+$'
+
+    if ( $parameterStrings.count -gt 2 )
+    {
+        # first two lines are the headers
+        $parameterStrings[ 0, 1 ]
+
+        $parameterStrings[ 2 ..( $parameterStrings.Count - 1 ) ] |
+        Sort-Object
+    }
+
+    #> # function Out-Parameters
+}
+
+
+function Write-VerboseParameters
+{
+    <#
+        .synopsis
+        Write parameters supplied to calling function.
+
+        .description
+        For logging or debugging, it is often useful to dump the paramters with which the function
+        was called. Unfortunatley, $PSBoundParameters does not report defalut parameter values.
+        Additionally, because of variable scoping, it can be difficult to use shared code to get
+        parameter values.
+
+        This provides a best-effort attempt to display the parameters supplied to the calling function.
+
+        .parameter FunctionName
+        Optional (but highly recommended!) parameter used to specify the calling function. If not
+        supplied, this function will use $MyInvocation value(s) from increasing scope to attempt to
+        determine the calling function name, but that can be highly brittle.
+
+        .parameter Parameters
+        Optional (but highly recommended!) parameter into which to specify $PSBoundParameters from
+        the calling function. Again, if not supplied, this function will use Get-Variable to
+        attempt to obtain $PSBoundParameters from the calling scope, but this can be highly brittle
+        with the variety of ways a function can be invoked, defined, etc.
+
+        .parameter Scope
+        Value passed to Get-Variable -Scope parameter to get parameter values from the calling function.
+
+        .example
+        function Test-It { param ( $a, $b, $c ); Write-VerboseParameters -FunctionName Test-It -Parameters $PSBoundParameters}
+
+        Using it in a function to output the [string[]] array to VERBOSE
+
+        .example
+        Test-It -a 3 -c $false -Verbose
+
+        Example of sample output to VERBOSE:
+
+        VERBOSE: Test-It was called with the following parameters:
+        Name                           Value
+        ----                           -----
+        a                              3
+        c                              False
+        Verbose                        True
+    #>
+
+    [CmdletBinding()]
+
+    param
+    (
+        [hashtable]$Parameters = @{ },
+
+        [string]$FunctionName = $null,
+
+        [int]$Scope = 1
+    )
+
+    if ( !$Parameters )
+    {
+        # try to get it, but ... no guarantees.
+        $Parameters = Get-Variable -ValueOnly -ErrorAction SilentlyContinue -Name PSBoundParameters -Scope $scope
+    }
+
+    if ( !$FunctionName )
+    {
+        # try to get it, but ... no guarantees.
+
+        if ( [Management.Automation.InvocationInfo]$_myinvocation =
+            Get-Variable -ValueOnly -ErrorAction SilentlyContinue -Name MyInvocation -Scope $Scope )
+        {
+            $FunctionName = $_myInvocation.MyCommand.Name
+        }
+
+        # increase it by one because we need the paramters of the function named $FUNCTIONAME, not the
+        # variables in scope containing the $MYINVOCATION variable containing the calling function name
+
+        $scope++
+
+        if ( !$FunctionName )
+        {
+            # if we didn't get anything back, then it's time to bail
+            break
+        }
+
+        if (
+            Get-Command -CommandType Function -Name $functionName* |
+            Where-Object -Property Name -EQ $FunctionName
+        )
+        {
+            # if we hit a function (as opposed to, say a .PSM1) call it good. Yes, sometimes the
+            #parent-scope MyInvocation returns the .PSM1 file name. #WhiskeyTangoFoxtrot?
+            break
+        }
+    }
+
+    if ( !$FunctionName )
+    {
+        # if we failed, punt. It's the calling function's problem.
+        throw 'Out-Parameters -FunctionName not specified and cannot be determined. Required.'
+    }
+
+    [string]$parameterStrings = ( Out-Parameters -Parameters $Parameters -FunctionName $FunctionName -Scope 2 ) -join "`n"
+
+    "$functionName called with the following parameters:`n$parameterStrings" |
+    Write-Verbose
+
+    #> # function Write-VerboseParameter
+}
+
+
+function Write-WarningException
+{
+    <#
+        .SYNOPSIS
+        Normalize error formatting.
+
+        .PARAMETER FunctionName
+        Function (or other string indicating context) in which error occurred.
+
+        .PARAMETER ErrorRecord
+        [Management.Automation.ErrorRecord] object containing exception.
+
+        .EXAMPLE
+        try { ... } catch { Write-WarningException -FunctionName $functionName -ErrorRecord $_ -Folder $errLogDir }
+    #>
+
+    [CmdletBinding()]
+
+    param
+    (
+        [string]$FunctionName = '',
+
+        [Management.Automation.ErrorRecord]$ErrorRecord,
+
+        [string]$Folder = $( [IO.Path]::GetTempFileName() -replace '\.tmp$' )
+    )
+
+    if ( !$FunctionName )
+    {
+        # try to get it, but ... no guarantees.
+
+        if ( [Management.Automation.InvocationInfo]$_myinvocation =
+            Get-Variable -ValueOnly -ErrorAction SilentlyContinue -Name MyInvocation -Scope $Scope )
+        {
+            $FunctionName = $_myInvocation.MyCommand.Name
+        }
+
+        # increase it by one because we need the paramters of the function named $FUNCTIONAME, not the
+        # variables in scope containing the $MYINVOCATION variable containing the calling function name
+
+        $scope++
+
+        if ( !$FunctionName )
+        {
+            # if we didn't get anything back, then it's time to bail
+            break
+        }
+
+        if (
+            Get-Command -CommandType Function -Name $functionName* |
+            Where-Object -Property Name -EQ $FunctionName
+        )
+        {
+            # if we hit a function (as opposed to, say a .PSM1) call it good. Yes, sometimes the
+            #parent-scope MyInvocation returns the .PSM1 file name. #WhiskeyTangoFoxtrot?
+            break
+        }
+    }
+
+    Write-Warning -Message "$FunctionName threw exception:"
+    $ErrorRecord |
+    Write-Warning
+
+    # save exception as PSObject as CliXml for later investigation
+    $errorCliXmlPath = "$FolderName\${functionName}_Error_" +
+    "$( Get-Date -Format 'yyyy-MM-dd_HH-mm-ss_fff' ).CliXml" -replace '>'
+
+    Write-Warning -Message "Saving `$ErrorRecord to '$errorCliXmlPath'"
+    New-Item -Force -Path $errorCliXmlPath -ItemType File |
+    Select-Object -ExpandProperty FullName |
+    Write-Verbose
+
+    $ErrorRecord |
+    Export-Clixml -Path $errorCliXmlPath
+
+    # give detailed stacktrace data.
+    $ErrorRecord.ErrorDetails_ScriptStackTrace -split '[\r\n]+' |
+    ForEach-Object -Process `
+    {
+        # reformat stack trace output so we can copy-paste them as Set-PSBreakpoint parameters.
+        [string]$line = $_ -replace '<(Begin|Process|End|ScriptBlock)>, (.*\\.*): line (\d+)',
+        "<`$1> -Script `$2 -Line `$3"
+
+        Write-Warning -Message "    $line"
+    }
+
+    #> # function Receive-CaughtException
+}
+
+
+########################################
+#endregion debugging functions
 #region utility functions
 ########################################
 
 
-function Get-ParameterString
+function Test-Command
 {
     <#
-            .Synopsis
-            Get all parameter values passed into the calling function.
+        .synopsis
+        Does command exist?
 
-            .DESCRIPTION
-            There exists currently no way to output the command line with actual values.
+        .parameter Name
+        Name of command. Mandatory.
 
-            $MyInvocation.Line will output the command line verbatim, so if it istarted
-            with variables (as opposed to string literals), then those variable names 
-            will be returned in $myInvocation.Line.
+        .parameter CommandType
+        Type of command.
 
-            $PSBoundParameters does not contain parameters not specified on the command
-            line and use their default values.
-
-            .PARAMETER RethrowExceptions
-            By default, this function demotes terminating errors into warnings. Enabling
-            this switch will still output the terminating error into a warning, but will
-            also re-throw the error into the calling context.
-
-            .EXAMPLE
-            function Test-It { param ( [string]$String = 'default', [int]$Int = 20 ); Get-ParameterString }
-            This will return "Test-It -String default -Int 20
-
-            .INPUTS
-            [void]
-
-            .OUTPUTS
-            [string]
-
-            .NOTES
-            // Copyright (c) Microsoft Corporation. All rights reserved.
-            // Licensed under the MIT license.
-
-            .COMPONENT
-            Utility function.
-
-            .ROLE
-            Dev
-
-            .FUNCTIONALITY
-            Rehydrate the calling command line.
+        .parameter AsObject
+        Return the [Management.Automation.CommandInfo] object
     #>
 
     [CmdletBinding()]
-    [OutputType([String])]
-    Param
-    (
-        [switch]$RethrowExceptions
+
+    param (
+        [string]$Name = $( throw '-Name not specified. Required.' ),
+
+        [Management.Automation.CommandTypes]$CommandType = 'All',
+
+        [switch]$AsObject
     )
 
-    Begin
+    [Management.Automation.CommandInfo]$commandInfo =
+    Get-Command -CommandType $CommandType -Name $Name* |
+    Where-Object -Property Name -EQ -Value $Name
+
+    if ( $AsObject )
     {
-        [string]$functionName = $MyInvocation.MyCommand.Name
+        return $commandInfo
+    }
 
-        if ( $DebugPreference -eq 'Continue' )
-        {
-            # we're outputting this only at -Debug level because it's a utility function
-            Write-Debug -ErrorAction SilentlyContinue -Message "'$(
-                $MyInvocation.Line -replace '^\s+' -replace '\s+$'
-            )' started."
-        }
+    $commandInfo -as [bool]
 
-        # we need to promote non-terminating errors to terminating ones so the try{} catch{}
-        # will handle them
-        $ErrorActionPreference = 'Stop'
-
-    } #Begin
-
-    End
-    {
-        try
-        {
-            # we need $myInvocation to get the calling function name
-            [Management.Automation.InvocationInfo]$yourInvocation =
-            Get-Variable -Name MyInvocation -Scope 1 -ValueOnly
-
-            # we need the calling function name for the output, and for Get-Command data
-            [string]$yourFunctionName =
-            $yourInvocation.MyCommand.Name
-
-            if ($yourFunctionName -match '\.psm1' )
-            {
-                throw "$functionName must be called from within a function defined in a PSModule."
-            }
-
-            # we need the Get-Command data for getting the parameters the function accepts
-            [Management.Automation.FunctionInfo]$yourFunctionData =
-            Get-Command -Name $yourFunctionName
-
-            # we need $PSCmdlet to get the ParameterSetName the caller is using
-            if ( !( 
-                    $yourPSCmdlet = (
-                        Get-Variable -Name PSCmdlet* -Scope 1 |
-                        Where-Object -Property Name -EQ -Value PSCmdlet
-                    ).Value
-            ) )
-            {
-                # if the caller's $PSCmdlet isn't defined, it doesn't have 
-                # [CmdletBinding()], so we'll have to put with whatever is on $line...
-                $yourInvocation.Line -replace '^\s+' -replace '\s+$'
-                return
-            }
-
-            # we need this array so we can match against all available parameters
-            # both the ParameterSetName the caller is using, and the default set
-            [string[]]$parameterSetNames = @(
-                $yourPSCmdlet.ParameterSetName,
-                '__AllParameterSets'
-            ) |
-            Where-Object -Property Length -GT 0 |
-            Select-Object -Unique
-
-            # we need this array to exclude the spam from PSH Common Parameters
-            [string[]]$commonParameters = @(
-                'Verbose',
-                'Debug',
-                'ErrorAction',
-                'WarningAction',
-                'InformationAction',
-                'ErrorVariable',
-                'WarningVariable',
-                'InformationVariable',
-                'OutVariable',
-                'OutBuffer',
-                'PipelineVariable',
-                'WhatIf',
-                'Confirm'
-            )
-
-            # we need this array for output. First element is the function's name.
-            [Collections.ArrayList]$commandLineTokens = @(
-                $yourFunctionName
-            )
-
-            $yourFunctionData.Parameters.Values |
-            Where-Object -FilterScript `
-            {
-                # we use this to filter out all parameter data (not strings) for which
-                # we want data: not Common parameters, and in the ParameterSetName(s)
-                # the caller is using
-                if ( $_.Name -notin $commonParameters )
-                {
-                    foreach ( $_parameterSetName in $_.ParameterSets.Keys )
-                    {
-                        if ( $_parameterSetName -in $parameterSetNames )
-                        {
-                            $true
-                            break
-                        }
-                    }
-                }
-            } |
-            ForEach-Object -Process `
-            {
-                [string]$parameterName = $_.Name
-
-                $parameterValue = Get-Variable -Name $parameterName -Scope 1 -ValueOnly
-
-                if ( $_.SwitchParameter )
-                {
-                    # we need to test this because [switch] parameters pass in values
-                    # differently: -Confirm:$false
-                    $commandLineTokens += "-${parameterName}:$parameterValue"
-                }
-                elseif ( $parameterValue -ne $null )
-                {
-                    # this builds the command line
-                    $commandLineTokens += "-$parameterName"
-                    $commandLineTokens += "'$parameterValue'"
-                }
-            }
-
-            # this outputs the command line
-            $commandLineTokens -join ' '
-
-            return
-        }
-
-        catch
-        {
-            
-            Write-Warning -Message "$functionName hit exception in $( $_.InvocationInfo.ScriptLineNumber )"
-            
-            $_ |
-            Write-Warning
-
-            if ( $RethrowExceptions )
-            {
-                $_
-            }
-
-            return
-        }
-
-        finally
-        {
-            Write-Debug -ErrorAction SilentlyContinue -Message "$functionName finished."
-        }
-
-    } # End
-
-    # break the hash+greater-than string that terminates the blockcomment for the 
-    # comment based help to expand all nested folded regoins in this function
-    # until this line (in other words, the whole function.)
-    #> # function Invoke-Noun
+    #> # function Test-Command
 }
 
 
-function test-It
+function Write-Null
 {
-    # .SYNOPSIS
-    # Force reload this module, then execute the function under test.
 
-    [CmdletBinding()]param()
+    <#
+        .synopsis
+        Suppress Write-Host
 
-    [bool]$verbose = [bool]$debug = $false
-    if ($VerbosePreference -eq 'Continue' )
-    {
-        $verbose = $true
-    }
+        .description
+        Alias Write-Host to this to suppress it in other scripts.
 
-    if ( $DebugPreference -eq 'Continue' )
-    {
-        $debug = $true
-    }
-
-    Import-Module -Force -Global -Verbose:$verbose -Debug:$debug -Name $PSCommandPath
-
-    # function under test here
-    #Do-Something -Parameter1 $parameter1 -Verbose:$verbose -Debug:$debug
+        .example
+        Set-Alias -Scope Global -Name Write-Host -Value Write-Null
+        #>
 
 }
 
+
+function Write-StandardOut
+{
+    <#
+        .synopsis
+        Redirect Write-Host to STDOUT
+
+        .description
+        Alias Write-Host to this to send output to STDOUT
+
+        .example
+        Set-Alias -Scope Global -Name Write-Host -Value Write-StandardOut
+    #>
+
+    begin
+    {
+        [switch]$inPipeline = $false
+    }
+
+    process
+    {
+        if ( $input.Value )
+        {
+            # $input -as [bool] is always $true, so we have to look at $input.Value
+            # to determine if we're being called in pipeline or not
+
+            $input
+
+            if ( !$inPipeline )
+            {
+                $inPipeline = $true
+            }
+        }
+    }
+
+    end
+    {
+        if ( !$inPipeline )
+        {
+            $args
+        }
+    }
+
+    #> # function Write-StandardOut
+}
+
+
+function Write-ProgressPipeline
+{
+    <#
+        .SYNOPSIS
+        Provide a Write-Progress for a long-running pipeline for signs of life.
+
+        .PARAMETER InputObject
+        Data stream to count.
+
+        .PARAMETER Activity
+        Write-Progress -Activity parameter value.
+
+        .PARAMETER StatusSuffix
+        Write-Progress -Status will be populated with a running count of objects passed through.
+        This will be appened to give an indication of what type of objects are being counted.
+
+        .PARAMETER TotalObjects
+        If provided, this function will specify a -PercentComplete to Write-Progress
+
+        .PARAMETER Interval
+        How often to update the Write-Progress, expressed in terms of the count of objects
+        to pass through before sending another Write-Progress call.
+
+        .PARAMETER ID
+        Write-Progress -Id Parameter value.
+
+        .PARAMETER BreadCrumb
+        Not used, but included so the function can accept -BreadCrumb parameter if called with it.
+
+        .PARAMETER Initialize
+        Output a 'starting condition' message: dummy Write-Verbose, dummy Write-Progress to indicate starting state.
+
+        .EXAMPLE
+        $kustoData | Write-Progress -Activity Get-KustoIpamAllocationsData -StatusSuffix 'IPAM allocation records processed' -TotalObjects $kustoData.Count -Interval 1000 -Id $writeProgressId
+
+        Writes the following as Write-Progress to update the user on current progres at a given
+        point in the Get-KustoIpamAllocationsData function.
+
+        Get-KustoIpamAllocationsData
+        26000 / 34973 (74%) IPAM allocation records processed
+        [ooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo                          ]
+        Current time: 15:23:46  Elapsed time: 00:08:21  Expected completion: 15:26:36
+
+        Writes the following as to [Verbose] stream (visible if user specified -Verbose)
+
+        Get-KustoIpamAllocationsData 26000 / 34973 (74%) IPAM allocation records processed
+        Current time: 15:23:46  Elapsed time: 00:08:21  Expected completion: 15:26:36
+    #>
+
+    [CmdletBinding()]
+
+    param
+    (
+        [Parameter(
+            ValueFromPipeline,
+            ValueFromPipelineByPropertyName
+        )]
+        [PSCustomObject[]]$InputObject,
+
+        [string]$Activity = ' ',
+
+        [string]$StatusSuffix = 'objects processed',
+
+        [uint32]$TotalObjects = 0,
+
+        [ValidateRange( 1, 1MB )]
+        [uint16]$Interval = 1000,
+
+        [uint16]$Id = 0,
+
+        [string[]]$BreadCrumb,
+
+        [switch]$Initialize
+    )
+
+    begin
+    {
+        # this is an internal function, so we don't need the $functionName nor $BreadCrumb
+        [uint32]$i = 0
+
+        [DateTime]$startTime = Get-Date
+
+        if ( !$Initialize )
+        {
+            [HashTable]$writeProgressPipelineParameters =
+            @{
+                Initialize   = $true
+                InputObject  = 1
+                Activity     = $Activity
+                StatusSuffix = $StatusSuffix
+                TotalObjects = $TotalObjects
+                Interval     = $Interval
+                Id           = $Id
+            }
+
+            # start it off with a noop record so the screen doesn't freeze until the first
+            # interval count is reached.
+            Write-ProgressPipeline @writeProgressPipelineParameters
+        }
+
+        if ( $TotalObjects )
+        {
+            [uint16]$fieldWidth = "$TotalObjects".Length
+        }
+    }
+
+    process
+    {
+        if ( $Initialize )
+        {
+            [DateTime]$now = Get-Date
+
+            [TimeSpan]$elapsedTime = $now - $startTime
+
+            # trying to set $elapsedTimeMessage works on interactive console, but when run as scheduled task:
+            #
+            # ForEach-Object : Cannot overwrite variable elapsedTimeMessage because the variable has
+            # been optimized. Try using the New-Variable or Set-Variable cmdlet (without any aliases),
+            # or dot-source the command that you are using to set the variable.
+            #
+            # ... so , we're going to call Set-Variable instead.
+            ' Current time: {3}  Elapsed time: {0:00}:{1:00}:{2:00}' -f `
+            @(
+                $elapsedTime.TotalHours
+                $elapsedTime.Minutes
+                $elapsedTime.Seconds
+                ( Get-Date -Format 'HH:mm:ss' )
+            ) |
+            Set-Variable -Force -Name elapsedTimeMessage
+
+            [HashTable]$writeProgressParameters =
+            @{
+                Activity = "$Activity "
+                Id       = $Id
+            }
+
+            if ( $TotalObjects )
+            {
+                $writeProgressParameters.Status = "{0,$fieldWidth} / $TotalObjects (0%) $StatusSuffix" -f $i
+                $writeProgressParameters.PercentComplete = 0
+            }
+            else
+            {
+                $writeProgressParameters.Status = "$i $StatusSuffix"
+            }
+
+            $writeProgressParameters.CurrentOperation = "$elapsedTimeMessage  Expected completion: ??:??:??"
+
+            Write-Verbose -Message ( "$Activity $( $writeProgressParameters.Status )`n    $elapsedTimeMessage " )
+            Write-Progress @writeProgressParameters
+
+            return
+
+        } #  if ( $Initialize )
+
+        $InputObject |
+        ForEach-Object -Process `
+        {
+            $i++
+
+            if ( !( $i % $Interval ) )
+            {
+                [DateTime]$now = Get-Date
+
+                [TimeSpan]$elapsedTime = $now - $startTime
+
+                ' Current time: {3}  Elapsed time: {0:00}:{1:00}:{2:00}' -f `
+                @(
+                    $elapsedTime.TotalHours
+                    $elapsedTime.Minutes
+                    $elapsedTime.Seconds
+                    ( Get-Date -Format 'HH:mm:ss' )
+                ) |
+                Set-Variable -Force -Name elapsedTimeMessage
+
+                [HashTable]$writeProgressParameters =
+                @{
+                    Activity = "$Activity "
+                    Id       = $Id
+                }
+
+                if ( $TotalObjects )
+                {
+                    # if we have a count of the total objects in the pipeline, we can estimate
+                    # when we'll be done
+
+                    # -PercentComplete
+                    [int]$percentComplete = ( 100 * $i / $TotalObjects ) % 101
+                    $writeProgressParameters.Status = "{0,$fieldWidth} / $TotalObjects ($percentComplete%) $StatusSuffix" -f $i
+                    $writeProgressParameters.PercentComplete = $percentComplete
+
+                    # -CurrentOperation will give an estimate as to when it completes
+                    [double]$totalMilliSeconds = $elapsedTime.TotalMilliseconds
+
+                    [int]$toDoCount = $TotalObjects - $i
+
+                    if ( $toDoCount )
+                    {
+                        if ( $toDoCount -le 0 )
+                        {
+                            return
+                        }
+
+                        # this is an empirical formula (translation: trial and error) to try to
+                        # compensate for irregularities in sampling data. the theory behind it
+                        # is that the larger the individual operation takes to do, the greater
+                        # the chance that the aggregation of the remaining operations will take
+                        # longer than the single sample. however, the fewer remaining operations
+                        # remain to do, the lower the overall effect of this estimated skew.
+                        #
+                        # or, you can just treat it like I do: it works, so I don't care why.
+                        #
+                        # for pulling IPAM records, it allows 35 samples of 1000 records per sample
+                        # across ~35000 records to have an estimated end-of-processing [DateTime]
+                        # to be consistent within 2 minutes of the actual time.
+                        [double]$fudgeFactor = ( 1 + [Math]::Log10( [Math]::Log10( [Math]::Log( $toDoCount ) ) ) ) / $i / 1000
+
+                        [double]$secondsToAdd = $totalMilliSeconds * $toDoCount * $fudgeFactor
+
+                        if ( $secondsToAdd -gt 0 )
+                        {
+                            # usually, we'll need to update the banner
+
+                            try
+                            {
+                                [DateTime]$expectedCompletion = $now.AddSeconds( $secondsToAdd )
+                            }
+                            catch
+                            {
+                                Write-Debug -Message $secondsToAdd
+                                $_ |
+                                Write-Warning
+                                $secondsToAdd = 0
+                            }
+
+                        } # if ( $secondsToAdd -gt 0 )
+                        else
+                        {
+                            [DateTime]$expectedCompletion = $now
+                        }
+
+                    } # if ( $toDoCount )
+                    else
+                    {
+                        $secondsToAdd = 0
+                        [DateTime]$expectedCompletion = $now
+                    }
+
+                    if ( $secondsToAdd -le 0 )
+                    {
+                        [DateTime]$expectedCompletion = $now
+                    }
+
+                    $elapsedTimeMessage += '  Expected completion: {0:00}:{1:00}:{2:00}' -f `
+                    @(
+                        $expectedCompletion.Hour
+                        $expectedCompletion.Minute
+                        $expectedCompletion.Second
+                    )
+
+                } # if ( $TotalObjects )
+                else
+                {
+                    $writeProgressParameters.Status = "$i $StatusSuffix"
+                }
+
+                $writeProgressParameters.CurrentOperation = $elapsedTimeMessage
+
+                Write-Verbose -Message ( "$Activity $( $writeProgressParameters.Status )`n    $elapsedTimeMessage " )
+                Write-Progress @writeProgressParameters
+
+            } # if ( !( $i % $Interval ) )
+
+            $_
+
+        } # $InputObject |
+
+    }
+
+    end
+    {
+        if ( !$Initialize )
+        {
+            # we want the Write-Progress bar to persist after we initialize it
+            Write-Progress -Status ' ' -Activity ' ' -Id $Id -Completed
+        }
+    }
+
+    #> # function Write-ProgressPipeline
+}
 
 
 ########################################
@@ -263,6 +784,7 @@ function test-It
 ########################################
 
 
+$null = @'
 function Invoke-Noun
 {
     <#
@@ -318,75 +840,75 @@ function Invoke-Noun
     #>
 
     [CmdletBinding(
-            DefaultParameterSetName='Planet Parameter Set', 
-            SupportsShouldProcess, 
-            PositionalBinding=$false,
-            HelpUri = 'http://www.microsoft.com/',
-            ConfirmImpact='Medium'
+        DefaultParameterSetName = 'Planet Parameter Set',
+        SupportsShouldProcess,
+        PositionalBinding = $false,
+        HelpUri = 'http://www.microsoft.com/',
+        ConfirmImpact = 'Medium'
     )]
     [Alias(
-            'Do-Something'
+        'Do-Something'
     )]
     [OutputType([String])]
     Param
     (
         # Param1 help description
         [Parameter(
-                Mandatory, 
-                ValueFromPipeline,
-                ValueFromPipelineByPropertyName, 
-                #ValueFromRemainingArguments=$false,
-                ParameterSetName='Planet Parameter Set', 
-                Position=0
+            Mandatory,
+            ValueFromPipeline,
+            ValueFromPipelineByPropertyName,
+            #ValueFromRemainingArguments=$false,
+            ParameterSetName = 'Planet Parameter Set',
+            Position = 0
         )]
         [ValidateNotNull()]
         [ValidateNotNullOrEmpty()]
         [ValidateCount( 0, 5)]
         [ValidateSet(
-                'Mercury',
-                'Venus',
-                'Earth',
-                'Mars',
-                'Jupiter',
-                'Saturn',
-                'Neptune',
-                'Uranus',
-                'Pluto'
+            'Mercury',
+            'Venus',
+            'Earth',
+            'Mars',
+            'Jupiter',
+            'Saturn',
+            'Neptune',
+            'Uranus',
+            'Pluto'
         )]
         [Alias(
-                'p1'
-        )] 
+            'p1'
+        )]
         $Planet,
 
         # Param2 help description
         [Parameter(
-                ParameterSetName='Planet Parameter Set',
-                Position = 10
+            ParameterSetName = 'Planet Parameter Set',
+            Position = 10
         )]
         [AllowNull()]
         [AllowEmptyCollection()]
         [AllowEmptyString()]
         [ValidateRange( 0, 50 )]
         [Alias(
-                'p2'
+            'p2'
         )]
         [int]
         $Moon = 0,
 
         # Param3 help description
         [Parameter(
-                ParameterSetName='Any Object Parameter Set',
-                Position=20
+            ParameterSetName = 'Any Object Parameter Set',
+            Position = 20
         )]
         [ValidatePattern( '[\w -]*' )]
         [ValidateLength( 0, 15 )]
         [Alias(
-                'p3'
+            'p3'
         )]
         [ValidateScript(
-                {
-                    Test-SampleNamesValue -Value $_
-                }
+            {
+                Test-SampleNamesValue -Value $_
+            }
         )]
         [String]
         $Name = $null,
@@ -412,14 +934,14 @@ function Invoke-Noun
                 # Content
             }
 
-    
+
         }
 
         catch
         {
-            
+
             Write-Warning -Message "$functionName hit exception in $( $_.InvocationInfo.ScriptLineNumber )"
-            
+
             $_ |
             Write-Warning
 
@@ -443,14 +965,14 @@ function Invoke-Noun
         try
         {
             # Content
-    
+
         }
 
         catch
         {
-            
+
             Write-Warning -Message "$functionName hit exception in $( $_.InvocationInfo.ScriptLineNumber )"
-            
+
             $_ |
             Write-Warning
 
@@ -483,9 +1005,9 @@ function Invoke-Noun
 #region externalize logging
 #========================================
 
-# in another module, I declared a ModuleName.init.ps1 script in $ScriptsToProcess 
+# in another module, I declared a ModuleName.init.ps1 script in $ScriptsToProcess
 # that defined a Write-LogMessage function so it was loaded before the PSM1s
-if ( 
+if (
     Get-Command -Name Write-LogMessage* -CommandType Function |
     Where-Object -Property Name -EQ -Value Write-LogMessage
 
@@ -518,7 +1040,7 @@ function Test-SampleNamesValue
     # Use this as a [ValidateScript()] to add [ValidateSet()] behaviour to a parameter.
     #
     # .PARAMETER Value
-    # Value to test. 
+    # Value to test.
     #
     # .EXAMPLE
     # function Show-It {param([ValidateScript({Test-SampleNamesValue -Value $_ })[string]$Name=$null);$Name}
@@ -527,7 +1049,7 @@ function Test-SampleNamesValue
     param
     (
         [Parameter(
-                Mandatory
+            Mandatory
         )]
         $value
     )
@@ -545,7 +1067,7 @@ Register-ArgumentCompleter -CommandName Invoke-Noun -ParameterName Name -ScriptB
     ForEach-Object -Process `
     {
         $value = "'$( $_ -replace "'", "''" )'"
-        
+
         [Management.Automation.CompletionResult]::new( $value, $value, 'ParameterValue', ( "Group: " + $value ) )
 
     }
@@ -554,6 +1076,11 @@ Register-ArgumentCompleter -CommandName Invoke-Noun -ParameterName Name -ScriptB
 #========================================
 #endregion dynamic [ValidateSet()]
 
+'@
+
 
 ########################################
 #endregion initialization
+<#
+
+#>
